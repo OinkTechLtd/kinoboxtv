@@ -1,210 +1,162 @@
 /* ===========================
-   KinoBox.tv — App Logic
+   KinoBox.tv — App Logic v2.1
+   Фикс: правильный роутинг при обновлении страницы
    =========================== */
 
 (function ($) {
   'use strict';
 
-  var currentKpId   = null;
-  var currentType   = 'films';
-  var playerInited  = false;
-  var CONTAINER     = '#kinoboxContainer';
-  var DEFAULT_ID    = 301;  // Матрица — запасной ID
+  var currentKpId  = null;
+  var currentType  = 'films';
+  var CONTAINER    = '#kinoboxContainer';
+  var DEFAULT_ID   = 301;
 
-  /* ===========================
-     PLAYER
-     =========================== */
+  /* === PLAYER === */
 
   function waitForKinobox(cb, attempts) {
     attempts = attempts || 0;
     if (typeof window.kinobox === 'function') {
       cb();
-    } else if (attempts < 30) {
-      setTimeout(function () { waitForKinobox(cb, attempts + 1); }, 200);
+    } else if (attempts < 40) {
+      setTimeout(function () { waitForKinobox(cb, attempts + 1); }, 150);
     } else {
-      showPlayerError('Ошибка: скрипт плеера не загрузился. Проверьте подключение к интернету.');
+      showPlayerError('Ошибка: скрипт плеера не загрузился.');
     }
   }
 
   function initPlayer(kinopoiskId) {
     if (!kinopoiskId || isNaN(kinopoiskId)) {
-      showPlayerError('Некорректный ID. Укажите числовой ID Кинопоиска в адресной строке.');
+      showPlayerError('Некорректный ID.');
       return;
     }
-
     var $container = $(CONTAINER);
     $container.empty();
     $container.attr('data-kinopoisk', kinopoiskId);
     $('#currentKpBadge').text('ID: ' + kinopoiskId);
+    $container.html('<div style="padding:60px 20px;text-align:center;color:#6a78a3;font-size:14px;">⏳ Загрузка плеера...</div>');
 
     waitForKinobox(function () {
+      $container.empty();
       try {
-        window.kinobox(CONTAINER, {
-          search: { kinopoisk: kinopoiskId }
-        });
-        playerInited = true;
-
-        // Geo-фильтр: убираем источник для определённых стран
-        setTimeout(function () {
-          applyGeoFilter();
-        }, 1000);
-
+        window.kinobox(CONTAINER, { search: { kinopoisk: kinopoiskId } });
+        if (window.kinoboxTitleName) window.kinoboxTitleName.update(kinopoiskId);
+        setTimeout(applyGeoFilter, 1200);
       } catch (e) {
-        console.error('[KinoBox] Ошибка плеера:', e);
-        showPlayerError('Ошибка инициализации плеера. Попробуйте обновить страницу.');
+        console.error('[KinoBox]', e);
+        showPlayerError('Ошибка инициализации. Обновите страницу.');
       }
     });
   }
 
   function showPlayerError(msg) {
-    $(CONTAINER).html(
-      '<div style="padding:60px 20px;text-align:center;color:#fca5a5;font-size:14px;">' +
-      '⚠️ ' + (msg || 'Ошибка загрузки плеера') +
-      '</div>'
-    );
+    $(CONTAINER).html('<div style="padding:60px 20px;text-align:center;color:#fca5a5;font-size:14px;">⚠️ ' + msg + '</div>');
   }
 
   function applyGeoFilter() {
-    var blockedCountries = ['AU','CA','DE','JP','NL','ES','TR','GB','US','FR'];
-    fetch('https://ip.nf/me.json')
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        var cc = data && data.ip && data.ip.country_code;
-        if (cc && blockedCountries.indexOf(cc) !== -1) {
-          var menu = document.querySelector('.kinobox__menuBody');
-          if (menu) {
-            var obrut = menu.querySelector('.kinobox__menuItem[data-iframe-url*="obrut"]');
-            if (obrut) obrut.remove();
-            var first = menu.querySelector('.kinobox__menuItem');
-            if (first) first.click();
-          }
+    var blocked = ['AU','CA','DE','JP','NL','ES','TR','GB','US','FR'];
+    fetch('https://ip.nf/me.json').then(function(r){return r.json();}).then(function(data){
+      var cc = data && data.ip && data.ip.country_code;
+      if (cc && blocked.indexOf(cc) !== -1) {
+        var menu = document.querySelector('.kinobox__menuBody');
+        if (menu) {
+          var obrut = menu.querySelector('.kinobox__menuItem[data-iframe-url*="obrut"]');
+          if (obrut) obrut.remove();
+          var first = menu.querySelector('.kinobox__menuItem');
+          if (first) first.click();
         }
-      })
-      .catch(function () { /* тихо игнорируем */ });
+      }
+    }).catch(function(){});
   }
 
-  /* ===========================
-     ROUTING
-     =========================== */
+  /* === ROUTING === */
 
-  function parseRoute() {
-    var path = window.location.pathname;
-
-    // /films/123 или /serials/123
+  function parseRoute(path) {
+    path = path || window.location.pathname;
     var m = path.match(/^\/(films|serials)\/(\d+)/i);
-    if (m) {
-      return { type: m[1].toLowerCase(), id: parseInt(m[2], 10) };
-    }
-
-    // /player или /watch?kp=123
+    if (m) return { type: m[1].toLowerCase(), id: parseInt(m[2], 10) };
     var qp = new URLSearchParams(window.location.search);
     var kpParam = qp.get('kp') || qp.get('id');
-    if (kpParam && /^\d+$/.test(kpParam)) {
-      return { type: 'films', id: parseInt(kpParam, 10) };
-    }
-
+    if (kpParam && /^\d+$/.test(kpParam)) return { type: 'films', id: parseInt(kpParam, 10) };
     return null;
   }
 
-  /* ===========================
-     PAGES
-     =========================== */
+  /* === PAGES === */
 
   function showPage(pageId) {
     $('.info-page').removeClass('active-page');
-    var pageMap = {
-      player:  '#playerPage',
-      landing: '#landingPage',
-      faq:     '#faqPage',
-      docs:    '#docsPage',
-      terms:   '#termsPage',
-      privacy: '#privacyPage',
-      about:   '#aboutPage'
+    var map = {
+      player: '#playerPage', landing: '#landingPage', faq: '#faqPage',
+      docs: '#docsPage', terms: '#termsPage', privacy: '#privacyPage', about: '#aboutPage'
     };
-    var sel = pageMap[pageId] || '#landingPage';
-    $(sel).addClass('active-page');
-
-    // Обновляем активную ссылку в навигации
+    $(map[pageId] || '#landingPage').addClass('active-page');
     $('.main-nav a').removeClass('active-link');
     $('.main-nav a[data-page="' + pageId + '"]').addClass('active-link');
-
-    // Прокручиваем наверх
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function goToPlayer(id, type) {
-    id   = id   || DEFAULT_ID;
+    id = parseInt(id, 10) || DEFAULT_ID;
     type = type || 'films';
-    currentKpId  = id;
-    currentType  = type;
-
-    window.history.pushState({ page: 'player', id: id, type: type }, '',
-      '/' + type + '/' + id);
-
+    currentKpId = id;
+    currentType = type;
+    var newUrl = '/' + type + '/' + id;
+    if (window.location.pathname !== newUrl) {
+      window.history.pushState({ page: 'player', id: id, type: type }, '', newUrl);
+    }
     showPage('player');
     initPlayer(id);
   }
 
-  /* ===========================
-     NAVIGATION BINDING
-     =========================== */
+  /* === NAV === */
 
   function bindNav() {
-    // Делегирование кликов по всему документу (для кнопок внутри страниц тоже)
     $(document).on('click', 'a[data-page]', function (e) {
       e.preventDefault();
       var page = $(this).attr('data-page');
-
       if (page === 'player') {
         var route = parseRoute();
-        if (route) {
-          goToPlayer(route.id, route.type);
-        } else {
-          // Если нет маршрута — показываем демо
-          goToPlayer(DEFAULT_ID, 'films');
-        }
+        goToPlayer(route ? route.id : DEFAULT_ID, route ? route.type : 'films');
       } else {
-        window.history.pushState({ page: page }, '', '#' + page);
+        window.history.pushState({ page: page }, '', '/#' + page);
         showPage(page);
       }
     });
   }
 
-  /* ===========================
-     POPSTATE (кнопки вперёд/назад)
-     =========================== */
-
   window.addEventListener('popstate', function (e) {
     var state = e.state;
-    if (state && state.page === 'player') {
-      showPage('player');
-      initPlayer(state.id);
-    } else {
-      var route = parseRoute();
-      if (route) {
-        showPage('player');
-        initPlayer(route.id);
-      } else {
-        showPage('landing');
-      }
-    }
+    if (state && state.page === 'player') { showPage('player'); initPlayer(state.id); return; }
+    if (state && state.page && state.page !== 'player') { showPage(state.page); return; }
+    var route = parseRoute();
+    if (route) { showPage('player'); initPlayer(route.id); } else { showPage('landing'); }
   });
 
   /* ===========================
-     INIT ON DOM READY
+     INIT — ГЛАВНЫЙ ФИХ БАГА
+     При обновлении страницы /films/301
+     сразу парсим URL и показываем плеер
      =========================== */
-
   $(document).ready(function () {
     bindNav();
 
     var route = parseRoute();
+
     if (route) {
-      currentKpId  = route.id;
-      currentType  = route.type;
+      // Пришли на /films/ID или /serials/ID — сразу грузим плеер
+      currentKpId = route.id;
+      currentType = route.type;
       showPage('player');
       initPlayer(route.id);
     } else {
-      showPage('landing');
+      // Главная или хэш-навигация
+      var hash = window.location.hash.replace('#', '');
+      var valid = ['faq', 'docs', 'terms', 'privacy', 'about', 'player'];
+      if (hash && valid.indexOf(hash) !== -1) {
+        if (hash === 'player') { goToPlayer(DEFAULT_ID, 'films'); }
+        else { showPage(hash); }
+      } else {
+        showPage('landing');
+      }
     }
   });
 
